@@ -1,3 +1,5 @@
+Demo: https://www.bilibili.com/video/bv1A54y1t7pC
+
 # 如何运行
 
 运行本程序需要安装python3.7版本, 不支持3.8, 3.9等更新版本, 原因是pygame midi这个库只兼容到3.7, 只在Windows平台测试过, 
