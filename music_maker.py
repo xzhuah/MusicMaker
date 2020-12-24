@@ -217,7 +217,7 @@ class Player:
 
 if __name__ == '__main__':
 
-    # 编写的简谱文件所在路径
+    # 编写的简谱文件所在路径, 后缀名随意, 保证格式正确即可
     file_to_play = "./sisterNoise.ply"
 
     player = Player()
