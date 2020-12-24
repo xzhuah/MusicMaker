@@ -1,3 +1,5 @@
+Demo: https://www.bilibili.com/video/bv1A54y1t7pC
+
 # 如何运行
 
 运行本程序需要安装python3.7版本, 不支持3.8, 3.9等更新版本, 原因是pygame midi这个库只兼容到3.7, 只在Windows平台测试过, 
@@ -8,9 +10,10 @@
 ```pip install pygame```
 
 直接运行, 可播放Sister's noise, 简谱文件见同目录下
+
 ```python music_maker.py```
 
-如果要播放其他简谱文件, 修改代码中的文件目录即可
+如果要播放其他简谱文件, 修改代码中的文件目录即可, 后缀不一定要ply, 随意即可, 只需保证文件格式正确
 
 # 简谱文件支持的属性
 1. 可以任意设置简谱的调性, 如1=Ab, 表示使用降A大调
