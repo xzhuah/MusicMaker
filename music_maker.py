@@ -4,14 +4,8 @@ import pygame.midi
 import time
 import threading
 
-def read_file(filename):
-    with open(filename, encoding='utf-8') as f:
-        data = f.read()
-    return data
-
-class Player:
+class MidiPlayer:
     def __init__(self):
-
         # 对于简谱上的一个数, 实际的声调应该在基础音阶的基础上增加多少
         self.unit_offset = {
             "1": 0,
@@ -25,6 +19,7 @@ class Player:
 
         # 播放器所使用的初始基础音阶, 60为midi对于C大调的1(哆)
         self.base_freq = 60
+        self.offset = 0
 
         # 根据简谱的调性, 播放器所使用的的基础音阶应该在初始基础音阶的基础上增加多少
         self.key_offset = {
@@ -47,6 +42,7 @@ class Player:
 
         # 每拍时间长度(s)
         self.pt = 0.66
+        self.default_velocity = 127
 
         # 4/4 拍, 主要影响每拍的强弱
         self.beat = "4/4"
@@ -55,24 +51,73 @@ class Player:
         self.less_strong_beat = 127
         self.weak_beat = 127
 
-        # 乐器种类: 普通钢琴
-        self.instrument = 0
-
+        self.auto_close_instrument = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 47, 112, 113, 114, 115, 116,
+                                      117, 118, 119, 127, 45}
+        self.auto_close_duration_index = 2
+        self.default_instrument = 0
         # 用于发声的midi模块初始化
         pygame.midi.init()
         self.output = pygame.midi.Output(pygame.midi.get_default_output_id())
-        self.output.set_instrument(self.instrument)
 
-        self.auto_close_instrument = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 47, 112, 113, 114, 115, 116,
-                                      117, 118, 119, 127, 45}
+        self.ins_to_channel = {
+            0: 0
+        }
+        self.next_channel = 1
+
+    def get_channel_for_instrument(self, instrument):
+        if instrument in self.ins_to_channel:
+            return self.ins_to_channel[instrument]
+        else:
+            self.ins_to_channel[instrument] = self.next_channel
+            self.next_channel += 1
+            if self.next_channel > 15:
+                self.next_channel = 1
+            return self.ins_to_channel[instrument]
+
+    def auto_play_and_close(self, note, velocity=127, duration=2, channel=0):
+        self.output.note_on(note, velocity, channel)
+        time.sleep(duration)
+        self.output.note_off(note, velocity, channel)
+
+    def play_single_note(self, instrument, note, velocity, duration=-1.0, channel_index=0):
+        self.output.set_instrument(instrument, channel_index)
+        if duration == -1.0:
+            self.output.note_on(note, velocity, channel_index)
+        else:
+            threading.Thread(target=self.auto_play_and_close,
+                             args=(note, velocity, duration, channel_index)).start()
+
+    def play_note(self, note):
+        for note_number in note["note"]:
+            if note_number > 0:
+                if note["ins"] in self.auto_close_instrument:
+                    self.play_single_note(note["ins"], note_number, note["velocity"], -1.0,
+                                          self.get_channel_for_instrument(note["ins"]))
+                else:
+                    self.play_single_note(note["ins"], note_number, note["velocity"],
+                                          self.pt * self.auto_close_duration_index,
+                                          self.get_channel_for_instrument(note["ins"]))
+            time.sleep(self.pt / len(note["note"]))
+
+    def play_chord(self, notes):
+        threads = []
+        for i, note in enumerate(notes):
+            threads.append(
+                threading.Thread(target=self.play_note, args=(note,)))
+        [thr.start() for thr in threads]
+        [thr.join() for thr in threads]
+
+    def play_section(self, list_of_notes: list):
+        for notes in list_of_notes:
+            self.play_chord(notes)
 
     def single_note_to_num(self, single_note: str):
-        '''
+        """
             将简谱中的单个音阶装换为实际频率代码
             支持的规则: 1: 普通的音阶, 1#: 升半调, .1: 升7度, 1..: 降两个7度, 1..#或者1#..: 降两个7度后升半调
             .1.: 会被解析为升两个7度, .1##.: 会忽略重复的#, 被解析为..1#
             不支持: .8.: 不在1~7的范围内, 返回-1, 不会播放, @1: 含有不合法字符, 返回-1 不会播放
-        '''
+        """
 
         # 以.开头视为需要升若干个7度, 否则需要降
         should_increase_7 = (single_note[0] == ".")
@@ -84,7 +129,7 @@ class Player:
         unit_key = single_note.replace(".", "").replace("#", "")
 
         if unit_key in self.unit_offset:
-            unit_key_freq = self.base_freq + self.unit_offset[unit_key]
+            unit_key_freq = self.base_freq + self.unit_offset[unit_key] + self.offset * 12
         else:
             return -1
 
@@ -97,95 +142,80 @@ class Player:
             unit_key_freq -= cycle_should_change * 12
         return unit_key_freq
 
-    def connected_note_to_num_list(self, connected_note: str):
-        '''
-            将类似 1_2. 这种有联系的多个音符转成一个数组, 每个数组中全部音阶播放的完的时间会相同, 也就是一个拍的时间
-            多个拍组成一个音轨的一个小节(segment), 4/4拍的音乐中, 4拍为一节
+    def note_str_to_note(self, note_str: str) -> list:
+        """
+           将类似 1_2. 这种有联系的多个音符转成一个数组, 每个数组中全部音阶播放的完的时间会相同, 也就是一个拍的时间
+           多个拍组成一个音轨的一个小节(segment), 4/4拍的音乐中, 4拍为一节
 
-            多个音轨组成的一个小节, 我们叫做一节(section), 也就是我们编写音乐中的一行, 播放时一节一节地解析播放
+           多个音轨组成的一个小节, 我们叫做一节(section), 也就是我们编写音乐中的一行, 播放时一节一节地解析播放
 
-            单个音节也能形成一个长度为1的数组
-        '''
+           单个音节也能形成一个长度为1的数组
+       """
         result = []
-        for single_unit in connected_note.split("_"):
+        for single_unit in note_str.split("_"):
             result.append(self.single_note_to_num(single_unit))
         return result
 
-    def segment_digitialize(self, segment: str):
-        '''
-            "1 1 1 3" is a segment
-            "4.._1. 6.._1. 4.._1. 6.._1." is another segment
-        '''
+    def parse_section_channel(self, channel_str: str) -> list:
+        # 规定在每个channel后面可以用方括号设定该channel的属性(乐器, 响度等)
+        local_attr_str = ""
+
+        if "[" in channel_str:
+            local_attr_str = channel_str[channel_str.index("[") + 1:channel_str.index("]")]
+            channel_str = channel_str[0:channel_str.index("[")]
+            channel_str = channel_str.strip()
+        attr = self.get_attr_from_str(local_attr_str)
         result = []
-        for connected_note in segment.split():
-            result.append(self.connected_note_to_num_list(connected_note))
+        for note_str in channel_str.split():
+            note = {
+                "ins": attr["ins="],
+                "note": self.note_str_to_note(note_str),
+                "velocity": attr["vol="]
+            }
+            result.append(note)
         return result
 
-    def section_digitialize(self, section: str):
-        '''
-        "1 1 1 3|6.._3. 1._3. 6.._3. 1._3." is a section with 2 segments in two different channels
-        if the first 1 should be played by 0.5 seconds, then the 6.. should be played by 0.25 seconds and the 3.
-        should be played by 0.25 seconds, 6.. and 1 will be played together, then 3.
-
-        [
-        [[1],      [1],     [1],      [3]],
-        [[6.., 3.],[1., 3.],[6.., 3.],[1., 3.]]
-        ]
-        '''
+    def parse_section(self, section_str: str):
         result = []
-        for segment in section.split("|"):
-            segment = segment.strip()
-            result.append(self.segment_digitialize(segment))
-        return result
+        for channel in section_str.split("|"):
+            result.append(self.parse_section_channel(channel))
+        re_arranged_result = []
+        for i in range(len(result[0])):
+            buffer = []
+            for j in range(len(result)):
+                if i >= len(result[j]):
+                    print("Error in channel length:", section_str)
+                    print(section_str.split("|")[j])
+                buffer.append(result[j][i])
+            re_arranged_result.append(buffer)
+        return re_arranged_result
 
-    def get_velocity(self, node_index):
-
-        if self.beat == "4/4":
-            if node_index == 0:
-                return self.strong_beat
-            elif node_index == 1:
-                return self.weak_beat
-            elif node_index == 2:
-                return self.less_strong_beat
-            elif node_index == 3:
-                return self.weak_beat
-        return self.strong_beat
-
-    def play_section(self, section: list):
-        '''
-        Play a digitialized section,
-        '''
-        # 每个channel的节拍数量应该相同, 可以用0补齐
-        channel_length = len(section[0])
-        for i in range(channel_length):
-            threads = []
-            for segment in section:
-                threads.append(threading.Thread(target=self.play_connected_node, args=(segment[i], self.get_velocity(node_index=i))))
-
-            [thr.start() for thr in threads]
-            [thr.join() for thr in threads]
-
-    def auto_play_and_close(self, note, velocity=127, duration=2):
-        self.output.note_on(note, velocity)
-        time.sleep(duration)
-        self.output.note_off(note, velocity)
-
-    def play_connected_node(self, connected_node: list, velocity=127):
-        time_interval = self.pt / len(connected_node)
-        for node in connected_node:
-            if node != -1:
-                if self.instrument not in self.auto_close_instrument:
-                    threading.Thread(target=self.auto_play_and_close, args=(node, velocity, self.pt * 2)).start()
-                else:
-                    self.output.note_on(node, velocity)
-            time.sleep(time_interval)
-
-    def play_music(self, music):
-        for section in music:
-            if "=" in section:
-                self.set_attr(section)
-            elif len(section) > 0:
-                self.play_section(self.section_digitialize(section))
+    def get_attr_from_str(self, attr=""):
+        base_attr = {
+            "1=": self.base_freq,
+            "p=": self.beat,
+            "pm=": self.pt,
+            "offset=": self.offset,
+            "ins=": self.default_instrument,
+            "vol=": self.default_velocity
+        }
+        attrs = attr.split(",")
+        for attr_unit in attrs:
+            attr_unit = attr_unit.replace(" ", "")
+            if "1=" in attr_unit:
+                key = attr_unit.replace("1=", "").strip()
+                base_attr["1="] = 60 + self.key_offset[key]
+            elif "p=" in attr_unit:
+                base_attr["p="] = attr_unit.replace("p=", "").strip()
+            elif "pm=" in attr_unit:
+                base_attr["pm="] = 60 / int(attr_unit.replace("pm=", ""))
+            elif "offset=" in attr_unit:
+                base_attr["offset="] = int(attr_unit.replace("offset=", ""))
+            elif "ins=" in attr_unit:
+                base_attr["ins="] = int(attr_unit.replace("ins=", ""))
+            elif "vol=" in attr_unit:
+                base_attr["vol="] = int(attr_unit.replace("vol=", ""))
+        return base_attr
 
     def set_attr(self, attr: str):
         attrs = attr.split(",")
@@ -193,23 +223,46 @@ class Player:
             self.set_attr_unit(attr_unit)
 
     def set_attr_unit(self, attr_unit: str):
+        attr_unit = attr_unit.replace(" ", "")
         if "1=" in attr_unit:
-            key = attr_unit.replace("1=", "")
+            key = attr_unit.replace("1=", "").strip()
             self.base_freq = 60 + self.key_offset[key]
         elif "p=" in attr_unit:
-            self.beat = attr_unit.replace("p=", "")
+            self.beat = attr_unit.replace("p=", "").strip()
         elif "pm=" in attr_unit:
             self.pt = 60 / int(attr_unit.replace("pm=", ""))
         elif "offset=" in attr_unit:
-            self.base_freq += int(attr_unit.replace("offset=", "")) * 12
+            self.offset = int(attr_unit.replace("offset=", ""))
         elif "ins=" in attr_unit:
-            self.instrument = int(attr_unit.replace("ins=", ""))
-            self.output.set_instrument(self.instrument)
+            self.default_instrument = int(attr_unit.replace("ins=", ""))
+        elif "vol=" in attr_unit:
+            self.default_velocity = int(attr_unit.replace("vol=", ""))
 
-    def read_and_play_music(self, filename):
-        content = read_file(filename)
-        content = content.split("\n")
-        self.play_music(content)
+    def stream_music(self, music_sheet: list):
+        play = True
+        for line in music_sheet:
+            if "//" in line:
+                # 跳过注释
+                continue
+            if "<" in line:
+                # 跳过播放
+                play = False
+                continue
+            if ">" in line:
+                # 开始播放
+                play = True
+                continue
+            if "=" in line and "[" not in line:
+                # 设置全局属性
+                self.set_attr(line)
+                continue
+            if play and line != "":
+                self.play_section(self.parse_section(line))
+
+    def play_file(self, filename):
+        with open(filename, encoding='utf-8') as f:
+            data = f.read()
+            self.stream_music(data.split("\n"))
 
     def close(self):
         self.output.close()
@@ -220,8 +273,8 @@ if __name__ == '__main__':
     # 编写的简谱文件所在路径, 后缀名随意, 保证格式正确即可
     file_to_play = "./sisterNoise.ply"
 
-    player = Player()
+    player = MidiPlayer()
 
-    player.read_and_play_music(file_to_play)
+    player.play_file(file_to_play)
 
     player.close()
