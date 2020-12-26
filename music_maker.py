@@ -65,14 +65,15 @@ class MidiPlayer:
         self.next_channel = 1
 
     def get_channel_for_instrument(self, instrument):
-        if instrument in self.ins_to_channel:
-            return self.ins_to_channel[instrument]
-        else:
-            self.ins_to_channel[instrument] = self.next_channel
-            self.next_channel += 1
-            if self.next_channel > 15:
-                self.next_channel = 1
-            return self.ins_to_channel[instrument]
+        return 0
+        # if instrument in self.ins_to_channel:
+        #     return self.ins_to_channel[instrument]
+        # else:
+        #     self.ins_to_channel[instrument] = self.next_channel
+        #     self.next_channel += 1
+        #     if self.next_channel > 15:
+        #         self.next_channel = 1
+        #     return self.ins_to_channel[instrument]
 
     def auto_play_and_close(self, note, velocity=127, duration=2, channel=0):
         self.output.note_on(note, velocity, channel)
