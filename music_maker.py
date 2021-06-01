@@ -1,8 +1,9 @@
 # Created by Xinyu Zhu on 2020/12/21, 1:31
-
 import pygame.midi
 import time
 import threading
+from ply_standardlizer import auto_format_for_file
+
 
 class MidiPlayer:
     def __init__(self):
@@ -53,8 +54,9 @@ class MidiPlayer:
 
         self.auto_close_instrument = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 47, 112, 113, 114, 115, 116,
                                       117, 118, 119, 127, 45}
-        self.auto_close_duration_index = 2
-        self.default_instrument = 0
+        # 对于无法自动停止的乐器, 在n个节拍后强制停止
+        self.auto_close_duration_index = 1
+        self.default_instrument = [0]
         # 用于发声的midi模块初始化
         pygame.midi.init()
         self.output = pygame.midi.Output(pygame.midi.get_default_output_id())
@@ -63,6 +65,11 @@ class MidiPlayer:
             0: 0
         }
         self.next_channel = 1
+
+    def choose_from_default_instrument(self, channel_index):
+        index = int(channel_index * len(self.default_instrument))
+        # print(channel_index, self.default_instrument, index)
+        return self.default_instrument[index]
 
     def get_channel_for_instrument(self, instrument):
         return 0
@@ -157,7 +164,7 @@ class MidiPlayer:
             result.append(self.single_note_to_num(single_unit))
         return result
 
-    def parse_section_channel(self, channel_str: str) -> list:
+    def parse_section_channel(self, channel_str: str, channel_index: float) -> list:
         # 规定在每个channel后面可以用方括号设定该channel的属性(乐器, 响度等)
         local_attr_str = ""
 
@@ -165,7 +172,7 @@ class MidiPlayer:
             local_attr_str = channel_str[channel_str.index("[") + 1:channel_str.index("]")]
             channel_str = channel_str[0:channel_str.index("[")]
             channel_str = channel_str.strip()
-        attr = self.get_attr_from_str(local_attr_str)
+        attr = self.get_attr_from_str(local_attr_str, channel_index)
         result = []
         for note_str in channel_str.split():
             note = {
@@ -176,10 +183,36 @@ class MidiPlayer:
             result.append(note)
         return result
 
+    def parse_repeated_channel(self, channel, last_channel, channel_index: float):
+        channel = channel.strip()
+        should_increase_note = 1 if channel.startswith(".") else -1
+        increase_count = channel.count(".")
+        this_channel = []
+
+        for channel_note in last_channel:
+            base_notes = channel_note["note"]
+            new_notes = []
+            for note in base_notes:
+                if note > 0:
+                    new_notes.append(note + increase_count * 12 * should_increase_note)
+                else:
+                    new_notes.append(note)
+            this_channel_node = {
+                "ins": channel_note["ins"],
+                "note": new_notes,
+                "velocity": channel_note["velocity"]
+            }
+            this_channel.append(this_channel_node)
+        return this_channel
+
     def parse_section(self, section_str: str):
         result = []
-        for channel in section_str.split("|"):
-            result.append(self.parse_section_channel(channel))
+        total_channel_num = section_str.count("|") + 1
+        for i, channel in enumerate(section_str.split("|")):
+            if "*" in channel:
+                result.append(self.parse_repeated_channel(channel, result[-1], i / total_channel_num))
+            else:
+                result.append(self.parse_section_channel(channel, i / total_channel_num))
         re_arranged_result = []
         for i in range(len(result[0])):
             buffer = []
@@ -191,13 +224,13 @@ class MidiPlayer:
             re_arranged_result.append(buffer)
         return re_arranged_result
 
-    def get_attr_from_str(self, attr=""):
+    def get_attr_from_str(self, attr="", channel_index=0):
         base_attr = {
             "1=": self.base_freq,
             "p=": self.beat,
             "pm=": self.pt,
             "offset=": self.offset,
-            "ins=": self.default_instrument,
+            "ins=": self.choose_from_default_instrument(channel_index),
             "vol=": self.default_velocity
         }
         attrs = attr.split(",")
@@ -235,7 +268,15 @@ class MidiPlayer:
         elif "offset=" in attr_unit:
             self.offset = int(attr_unit.replace("offset=", ""))
         elif "ins=" in attr_unit:
-            self.default_instrument = int(attr_unit.replace("ins=", ""))
+            ins_content = attr_unit.replace("ins=", "")
+            # support things like: ins = (1|2|3)
+            if "(" not in ins_content:
+                self.default_instrument = [int(ins_content)]
+            else:
+                ins_content = ins_content.replace("(", "").replace(")", "")
+                self.default_instrument = []
+                for ins in ins_content.split("|"):
+                    self.default_instrument.append(int(ins))
         elif "vol=" in attr_unit:
             self.default_velocity = int(attr_unit.replace("vol=", ""))
 
@@ -261,6 +302,7 @@ class MidiPlayer:
                 self.play_section(self.parse_section(line))
 
     def play_file(self, filename):
+        auto_format_for_file(filename)
         with open(filename, encoding='utf-8') as f:
             data = f.read()
             self.stream_music(data.split("\n"))
@@ -270,7 +312,6 @@ class MidiPlayer:
 
 
 if __name__ == '__main__':
-
     # 编写的简谱文件所在路径, 后缀名随意, 保证格式正确即可
     file_to_play = "./sisterNoise.ply"
 
