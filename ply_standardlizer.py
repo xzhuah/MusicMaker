@@ -6,12 +6,11 @@
 
 import re
 import statistics
+from utils import read_file, write_file
 
 
 def reformat(filename: str):
-    with open(filename, encoding='utf-8') as f:
-        data = f.read()
-        content = data.split("\n")
+    content = read_file(filename).split("\n")
     formatted_content = []
     for line in content:
         if need_reformat(line):
@@ -111,7 +110,10 @@ def sort_channel(line):
     for l in line.split("|"):
         line_to_medium[l] = extract_medium(l)
 
-    sorted_list = sorted(line_to_medium.items(), key=lambda item: item[1], reverse=True)
+    # sorted_list = sorted(line_to_medium.items(), key=lambda item: item[1], reverse=True)
+    # Uncomment this if you don't want to sort
+    sorted_list = line_to_medium.items()
+
     new_line = []
     for item in sorted_list:
         new_line.append(item[0])
@@ -138,9 +140,10 @@ def extract_medium(line: str):
 def write_to_file(refomatted, filename):
     while len(refomatted[-1]) == 0:
         refomatted.pop(-1)
-    with open(filename, encoding='utf-8', mode="w") as f:
-        for line in refomatted:
-            f.write(line + "\n")
+    result = ""
+    for line in refomatted:
+        result += line + "\n"
+    write_file(filename, result)
 
 
 def auto_format_for_file(filename):

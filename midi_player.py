@@ -1,8 +1,19 @@
-# Created by Xinyu Zhu on 2020/12/21, 1:31
+# Created by Xinyu Zhu on 2020/12/23, 23:16
 import pygame.midi
 import time
-import threading
+import os
 from ply_standardlizer import auto_format_for_file
+from utils import read_file
+from concurrent.futures import ThreadPoolExecutor
+
+_thread_pool = None
+
+
+def get_singleton_thread_pool() -> ThreadPoolExecutor:
+    global _thread_pool
+    if _thread_pool is None:
+        _thread_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="singleton_thread_pool")
+    return _thread_pool
 
 
 class MidiPlayer:
@@ -58,13 +69,19 @@ class MidiPlayer:
         self.auto_close_duration_index = 1
         self.default_instrument = [0]
         # 用于发声的midi模块初始化
-        pygame.midi.init()
-        self.output = pygame.midi.Output(pygame.midi.get_default_output_id())
+        self.output = get_singleton_midi_output()
 
         self.ins_to_channel = {
             0: 0
         }
         self.next_channel = 1
+        # self.data_manager = MusicDataManager()
+
+        # 是否固定使用默认乐器而不根据乐谱调整
+        self.force_instrument = False
+        self.force_to = 0
+
+        self.threading_pool = get_singleton_thread_pool()
 
     def choose_from_default_instrument(self, channel_index):
         index = int(channel_index * len(self.default_instrument))
@@ -92,8 +109,9 @@ class MidiPlayer:
         if duration == -1.0:
             self.output.note_on(note, velocity, channel_index)
         else:
-            threading.Thread(target=self.auto_play_and_close,
-                             args=(note, velocity, duration, channel_index)).start()
+            self.threading_pool.submit(self.auto_play_and_close, note, velocity, duration, channel_index)
+            # threading.Thread(target=self.auto_play_and_close,
+            #                  args=(note, velocity, duration, channel_index)).start()
 
     def play_note(self, note):
         for note_number in note["note"]:
@@ -108,15 +126,11 @@ class MidiPlayer:
             time.sleep(self.pt / len(note["note"]))
 
     def play_chord(self, notes):
-        threads = []
-        for i, note in enumerate(notes):
-            threads.append(
-                threading.Thread(target=self.play_note, args=(note,)))
-        [thr.start() for thr in threads]
-        [thr.join() for thr in threads]
+        list(self.threading_pool.map(self.play_note, notes))
 
     def play_section(self, list_of_notes: list):
         for notes in list_of_notes:
+            # print(notes)
             self.play_chord(notes)
 
     def single_note_to_num(self, single_note: str):
@@ -138,6 +152,8 @@ class MidiPlayer:
 
         if unit_key in self.unit_offset:
             unit_key_freq = self.base_freq + self.unit_offset[unit_key] + self.offset * 12
+        elif unit_key == '0':
+            return 0
         else:
             return -1
 
@@ -176,7 +192,7 @@ class MidiPlayer:
         result = []
         for note_str in channel_str.split():
             note = {
-                "ins": attr["ins="],
+                "ins": self.force_to if self.force_instrument else attr["ins="],
                 "note": self.note_str_to_note(note_str),
                 "velocity": attr["vol="]
             }
@@ -198,7 +214,7 @@ class MidiPlayer:
                 else:
                     new_notes.append(note)
             this_channel_node = {
-                "ins": channel_note["ins"],
+                "ins": self.force_to if self.force_instrument else channel_note["ins"],
                 "note": new_notes,
                 "velocity": channel_note["velocity"]
             }
@@ -299,24 +315,102 @@ class MidiPlayer:
                 self.set_attr(line)
                 continue
             if play and line != "":
+                print(line)
                 self.play_section(self.parse_section(line))
+
+    # an helper function for midi_io
+    def parse_music_line(self, music_sheet: list):
+        play = True
+        for line in music_sheet:
+            if "//" in line:
+                # 跳过注释
+                continue
+            if "<" in line:
+                # 跳过播放
+                play = False
+                continue
+            if ">" in line:
+                # 开始播放
+                play = True
+                continue
+            if "=" in line and "[" not in line:
+                # 设置全局属性
+                self.set_attr(line)
+                continue
+            if play and line != "":
+                yield self.parse_section(line), line
+
+    def compile_music(self, music_sheet: list):
+        # self.data_manager.init()
+        for line in music_sheet:
+            if "//" in line or "<" in line or ">" in line:
+                # 跳过注释
+                continue
+            if "=" in line and "[" not in line:
+                # 设置全局属性
+                self.set_attr(line)
+                continue
+        #     if line != "":
+        #         self.data_manager.parse_music(self.parse_section(line), self.pt, self.base_freq)
+        # self.data_manager.output_current()
 
     def play_file(self, filename):
         auto_format_for_file(filename)
-        with open(filename, encoding='utf-8') as f:
-            data = f.read()
-            self.stream_music(data.split("\n"))
+        data = read_file(filename)
+
+        self.compile_music(data.split("\n"))
+        self.stream_music(data.split("\n"))
 
     def close(self):
         self.output.close()
 
 
+midi_output = None
+
+
+def get_singleton_midi_output():
+    global midi_output
+    if midi_output is None:
+        pygame.midi.init()
+        midi_output = pygame.midi.Output(pygame.midi.get_default_output_id())
+    return midi_output
+
+
 if __name__ == '__main__':
-    # 编写的简谱文件所在路径, 后缀名随意, 保证格式正确即可
-    file_to_play = "./sisterNoise.ply"
-
     player = MidiPlayer()
+    # player.force_instrument = True
+    # player.play_file("test.ply")
+    player.play_file("ply/railgun_piano.ply")
+    player.play_file("ply/tonight.ply")
+    player.play_file("ply/ningchi.ply")
+    player.play_file("ply/yehangxin_single.ply")
+    player.play_file("ply/spectre.ply")
+    player.play_file("ply/qifengle.ply")
+    player.play_file("ply/yuxitan.ply")
+    player.play_file("ply/klodia.ply")
+    player.play_file("ply/lightofhumanity.ply")
 
-    player.play_file(file_to_play)
+    # player.play_file("ningchi.ply")
+    player.play_file("ply/astronomia.ply")
+    player.play_file("ply/railgun_piano.ply")
+    player.play_file("ply/level5.ply")
 
+    player.play_file("ply/qihung_end.ply")
+    player.play_file("ply/qihung_end2.ply")
+    player.play_file("ply/faded.ply")
+    player.play_file("ply/myHeartWillGoOn.ply")
+    player.play_file("ply/qianbenying.ply")
+    player.play_file("ply/one_punch.ply")
+    player.play_file("ply/nextToYou.ply")
+    player.play_file("ply/tail.ply")
+    player.play_file("ply/bird.ply")
+    player.play_file("ply/sisterNoise.ply")
+    player.play_file("ply/tanzilang.ply")
+    player.play_file("ply/railgun.ply")
+    player.play_file("ply/canon_1.ply")
+    player.play_file("ply/west.ply")
+    player.play_file("ply/xiaozhiqu.ply")
+
+    # player.play_section(player.parse_section(
+    #     "0 0 ..2 0 | 0_.6 ..1_..3 .5 0_-_..1_.7|..1_6 .1_.3 .2 0_-_.1_.7|0_-_6.._3. 1_3._1._6.. 0_-_4.._1. 6._1._6.._4..[ins=99]"))
     player.close()
