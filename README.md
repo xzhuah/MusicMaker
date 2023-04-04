@@ -7,7 +7,7 @@ Demo: https://www.bilibili.com/video/bv1A54y1t7pC
 
 需要安装pygame模块用来合成声音, [更多关于这个库的信息](https://www.pygame.org/docs/ref/midi.html)
 
-```pip install pygame```
+```pip install -r requirements.txt```
 
 直接运行, 可播放Sister's noise, 简谱文件见同目录下
 
