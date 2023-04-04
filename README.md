@@ -9,9 +9,13 @@ Demo: https://www.bilibili.com/video/bv1A54y1t7pC
 
 ```pip install -r requirements.txt```
 
-直接运行, 可播放Sister's noise, 简谱文件见同目录下
+直接运行, 可播放内置音乐, 简谱文件见同目录下
 
-```python music_maker.py```
+```python midi_player.py```
+
+运行键盘钢琴, 可在键盘上弹奏
+
+```python piano.py```
 
 如果要播放其他简谱文件, 修改代码中的文件目录即可, 后缀不一定要ply, 随意即可, 只需保证文件格式正确
 
